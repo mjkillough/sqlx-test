@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use sqlx::postgres::PgPool;
+use sqlx::postgres::{PgConnection, PgPool};
 use sqlx::prelude::*;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -24,10 +24,35 @@ struct Database {
 impl Repository for Database {
     #[tokio::main]
     async fn fetch_rows(&self) -> Result<Vec<Row>> {
-        let sql = "select * from table";
-        let rows = sqlx::query_as(sql).fetch_all(&self.pool).await?;
+        let mut conn = self.pool.acquire().await?;
+        let mut inner = Connection { conn: &mut conn };
+        let rows = inner.fetch_rows().await?;
         Ok(rows)
     }
+}
+
+struct Connection<'a> {
+    conn: &'a mut PgConnection,
+}
+
+impl<'a> Connection<'a> {
+    async fn fetch_rows(&mut self) -> Result<Vec<Row>> {
+        let sql = "select * from table";
+        let rows = sqlx::query_as(sql).fetch_all(&mut *self.conn).await?;
+        Ok(rows)
+    }
+}
+
+#[tokio::main]
+async fn wrap_in_tx(pool: PgPool) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let mut conn = Connection { conn: &mut tx };
+
+    let _rows = conn.fetch_rows().await?;
+
+    tx.rollback().await?;
+
+    Ok(())
 }
 
 fn main() {
